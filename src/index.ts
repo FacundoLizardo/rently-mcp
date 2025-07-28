@@ -2,7 +2,7 @@ import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-// Define our MCP agent with tools
+// Definimos nuestro MCP agent
 export class MyMCP extends McpAgent {
 	server = new McpServer({
 		name: "Authless Calculator",
@@ -10,7 +10,6 @@ export class MyMCP extends McpAgent {
 	});
 
 	async init() {
-		// Simple addition tool
 		this.server.tool(
 			"add",
 			{ a: z.number(), b: z.number() },
@@ -19,7 +18,6 @@ export class MyMCP extends McpAgent {
 			})
 		);
 
-		// Calculator tool with multiple operations
 		this.server.tool(
 			"calculate",
 			{
@@ -30,25 +28,17 @@ export class MyMCP extends McpAgent {
 			async ({ operation, a, b }) => {
 				let result: number;
 				switch (operation) {
-					case "add":
-						result = a + b;
-						break;
-					case "subtract":
-						result = a - b;
-						break;
-					case "multiply":
-						result = a * b;
-						break;
+					case "add": result = a + b; break;
+					case "subtract": result = a - b; break;
+					case "multiply": result = a * b; break;
 					case "divide":
-						if (b === 0)
+						if (b === 0) {
 							return {
 								content: [
-									{
-										type: "text",
-										text: "Error: Cannot divide by zero",
-									},
+									{ type: "text", text: "Error: Cannot divide by zero" },
 								],
 							};
+						}
 						result = a / b;
 						break;
 				}
@@ -59,17 +49,44 @@ export class MyMCP extends McpAgent {
 }
 
 export default {
-	fetch(request: Request, env: Env, ctx: ExecutionContext) {
+	async fetch(request: Request, env: Record<string, string>, ctx: ExecutionContext) {
 		const url = new URL(request.url);
+			// --- Usamos process.env directamente ---
+		const client_id = request.headers.get("client_id");
+		const client_secret = request.headers.get("client_secret");
+		const laburenApiKey = request.headers.get("laburen-api-key");
 
+
+		if (!client_id || !client_secret || !laburenApiKey) {
+			return new Response("Faltan headers/env de autenticación", { status: 401 });
+		}
+
+		// --- 2. Extendemos ExecutionContext con props custom ---
+		const extendedContext: ExecutionContext & { props?: Record<string, unknown> } = {
+			...ctx,
+			props: {
+				client_id,
+				client_secret,
+				laburenApiKey,
+			},
+			waitUntil: ctx.waitUntil.bind(ctx),
+			passThroughOnException: ctx.passThroughOnException.bind(ctx),
+		};
+
+		console.log("🔍 [fetch] Context props configuradas:", JSON.stringify(extendedContext.props, null, 2));
+
+		// --- 3. Routing ---
 		if (url.pathname === "/sse" || url.pathname === "/sse/message") {
-			return MyMCP.serveSSE("/sse").fetch(request, env, ctx);
+			console.log("🔄 [fetch] Redirigiendo a SSE");
+			return MyMCP.serveSSE("/sse").fetch(request, env, extendedContext);
 		}
 
 		if (url.pathname === "/mcp") {
-			return MyMCP.serve("/mcp").fetch(request, env, ctx);
+			console.log("🔄 [fetch] Redirigiendo a MCP");
+			return MyMCP.serve("/mcp").fetch(request, env, extendedContext);
 		}
 
+		console.log("❌ [fetch] Ruta no encontrada:", url.pathname);
 		return new Response("Not found", { status: 404 });
 	},
 };
