@@ -53,9 +53,9 @@ export default {
 	async fetch(request: Request, env: Record<string, string>, ctx: ExecutionContext) {
 		const url = new URL(request.url);
 			// --- Usamos process.env directamente ---
-		const client_id = request.headers.get("client_id");
-		const client_secret = request.headers.get("client_secret");
-		const laburenApiKey = request.headers.get("laburen-api-key");
+		const client_id = request.headers.get("client_id")|| "1";
+		const client_secret = request.headers.get("client_secret") || "1";
+		const laburenApiKey = request.headers.get("laburen-api-key") || "1";
 
 
 		if (!client_id || !client_secret || !laburenApiKey) {
