@@ -4,21 +4,31 @@
 	"private": true,
 	"scripts": {
 		"deploy": "wrangler deploy",
-		"dev": "wrangler dev",
+		"dev": "wrangler dev --config wrangler.jsonc",
+		"dev:local": "tsx src/index.ts",
+		"dev:prod": "wrangler dev",
 		"format": "biome format --write",
 		"lint:fix": "biome lint --fix",
-		"start": "wrangler dev",
+		"start": "npm run dev",
 		"cf-typegen": "wrangler types",
-		"type-check": "tsc --noEmit"
+		"type-check": "tsc --noEmit",
+		"test:headers": "node scripts/test-headers.js",
+		"test:env": "node scripts/test-env.js",
+		"test:default": "node scripts/test-default.js",
+		"test:all": "npm run test:headers && npm run test:env && npm run test:default"
 	},
 	"dependencies": {
 		"@modelcontextprotocol/sdk": "1.13.1",
+		"@types/uuid": "^10.0.0",
 		"agents": "^0.0.100",
 		"dotenv": "^17.2.1",
+		"uuid": "^11.1.0",
 		"zod": "^3.25.67"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.0.6",
+		"@cloudflare/workers-types": "^4.20250803.0",
+		"@types/node": "^24.1.0",
 		"typescript": "^5.8.3",
 		"wrangler": "^4.22.0"
 	}

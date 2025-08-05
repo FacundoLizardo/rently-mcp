@@ -1,92 +1,90 @@
-import { McpAgent } from "agents/mcp";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { z } from "zod";
+import { RentlyMCP } from "./mcp";
 
-// Definimos nuestro MCP agent
-export class MyMCP extends McpAgent {
-	server = new McpServer({
-		name: "Authless Calculator",
-		version: "1.0.0",
-	});
-
-	async init() {
-		this.server.tool(
-			"add",
-			{ a: z.number(), b: z.number() },
-			async ({ a, b }) => ({
-				content: [{ type: "text", text: String(a + b) }],
-			})
-		);
-
-		this.server.tool(
-			"calculate",
-			{
-				operation: z.enum(["add", "subtract", "multiply", "divide"]),
-				a: z.number(),
-				b: z.number(),
-			},
-			async ({ operation, a, b }) => {
-				let result: number;
-				switch (operation) {
-					case "add": result = a + b; break;
-					case "subtract": result = a - b; break;
-					case "multiply": result = a * b; break;
-					case "divide":
-						if (b === 0) {
-							return {
-								content: [
-									{ type: "text", text: "Error: Cannot divide by zero" },
-								],
-							};
-						}
-						result = a / b;
-						break;
-				}
-				return { content: [{ type: "text", text: String(result) }] };
-			}
-		);
-	}
-}
+export { RentlyMCP };
 
 export default {
-	async fetch(request: Request, env: Record<string, string>, ctx: ExecutionContext) {
-		const url = new URL(request.url);
-			// --- Usamos process.env directamente ---
-		const client_id = request.headers.get("client_id");
-		const client_secret = request.headers.get("client_secret");
-		const laburenApiKey = request.headers.get("laburen-api-key");
+    async fetch(request: Request, env: Env, ctx: ExecutionContext) {
+        const url = new URL(request.url);
 
+        // Extract Rently configuration headers
+        const baseUrl = request.headers.get("X-Rently-Base-Url");
+        const clientId = request.headers.get("X-Rently-Client-Id");
+        const clientSecret = request.headers.get("X-Rently-Client-Secret");
 
-		if (!client_id || !client_secret || !laburenApiKey) {
-			return new Response("Faltan headers/env de autenticación", { status: 401 });
-		}
+        // Create context with configuration
+        let context: ExecutionContext;
 
-		// --- 2. Extendemos ExecutionContext con props custom ---
-		const extendedContext: ExecutionContext & { props?: Record<string, unknown> } = {
-			...ctx,
-			props: {
-				client_id,
-				client_secret,
-				laburenApiKey,
-			},
-			waitUntil: ctx.waitUntil.bind(ctx),
-			passThroughOnException: ctx.passThroughOnException.bind(ctx),
-		};
+        // Check required Rently headers
+        if (!baseUrl || !clientId || !clientSecret) {
+            console.log(
+                "⚠️ [fetch] Rently headers not found. Attempting to use Cloudflare Workers environment variables."
+            );
 
-		console.log("🔍 [fetch] Context props configuradas:", JSON.stringify(extendedContext.props, null, 2));
+            // Try to use Cloudflare Workers environment variables
+            const envConfig = {
+                baseUrl: (env as any).BASE_URL || "https://demo.rently.com",
+                clientId: (env as any).CLIENT_ID || "demo_client",
+                clientSecret: (env as any).CLIENT_SECRET || "demo_secret"
+            };
 
-		// --- 3. Routing ---
-		if (url.pathname === "/sse" || url.pathname === "/sse/message") {
-			console.log("🔄 [fetch] Redirigiendo a SSE");
-			return MyMCP.serveSSE("/sse").fetch(request, env, extendedContext);
-		}
+            // Inject environment configuration into ExecutionContext props
+            context = Object.assign(Object.create(ctx), ctx, {
+                props: {
+                    ...(ctx as any).props,
+                    ...envConfig
+                }
+            });
 
-		if (url.pathname === "/mcp") {
-			console.log("🔄 [fetch] Redirigiendo a MCP");
-			return MyMCP.serve("/mcp").fetch(request, env, extendedContext);
-		}
+            console.log(
+                `🔍 [fetch] Environment configuration injected: ${envConfig.baseUrl}`
+            );
+        } else {
+            // Inject real configuration into ExecutionContext props
+            context = Object.assign(Object.create(ctx), ctx, {
+                props: {
+                    ...(ctx as any).props,
+                    baseUrl: baseUrl,
+                    clientId: clientId,
+                    clientSecret: clientSecret
+                }
+            });
 
-		console.log("❌ [fetch] Ruta no encontrada:", url.pathname);
-		return new Response("Not found", { status: 404 });
-	},
+            console.log("🔍 [fetch] Header configuration injected");
+        }
+
+        // Only MCP endpoints
+        if (url.pathname === "/sse" || url.pathname === "/sse/message") {
+            return RentlyMCP.serveSSE("/sse").fetch(request, env, context);
+        }
+
+        if (url.pathname === "/mcp") {
+            // Get the MCP Durable Object directly and call its fetch method
+            const mcpObject = (env as any).MCP_OBJECT as DurableObjectNamespace;
+            const id = mcpObject.idFromName("rently-mcp-server");
+            const stub = mcpObject.get(id);
+            
+            // Create a new request with configuration headers for the Durable Object
+            const newRequest = new Request(request.url, {
+                method: request.method,
+                headers: {
+                    ...Object.fromEntries(request.headers.entries()),
+                    // Pass configuration from context to Durable Object
+                    'X-Context-Base-Url': (context as any).props?.baseUrl || '',
+                    'X-Context-Client-Id': (context as any).props?.clientId || '',
+                    'X-Context-Client-Secret': (context as any).props?.clientSecret || ''
+                },
+                body: request.body
+            });
+            
+            // Call the Durable Object's fetch method directly
+            return await stub.fetch(newRequest);
+        }
+
+        // Health check endpoint
+        if (url.pathname === "/health") {
+            return new Response("OK", { status: 200 });
+        }
+
+        return new Response("Not found", { status: 404 });
+    }
 };
