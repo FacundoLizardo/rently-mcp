@@ -4,30 +4,25 @@
  */
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "rently-mcp-server",
+	"name": "rently-mcp",
 	"main": "src/index.ts",
 	"compatibility_date": "2025-03-10",
 	"compatibility_flags": ["nodejs_compat"],
-	"durable_objects": {
-		"bindings": [
-			{
-				"name": "MCP_OBJECT",
-				"class_name": "RentlyMCP"
-			}
-		]
-	},
 	"migrations": [
 		{
-			"new_sqlite_classes": ["RentlyMCP"],
+			"new_sqlite_classes": ["MyMCP"],
 			"tag": "v1"
 		}
 	],
+	"durable_objects": {
+		"bindings": [
+			{
+				"class_name": "MyMCP",
+				"name": "MCP_OBJECT"
+			}
+		]
+	},
 	"observability": {
 		"enabled": true
-	},
-	"vars": {
-		"BASE_URL": "https://taraborellirentacar.rently.com.ar",
-		"CLIENT_ID": "laburen",
-		"CLIENT_SECRET": "SGx5SSRMNWc7KypPYlU+YXRhVDEjXl0leTZpK3I/eC1LalF2e19NXipHb2s5cSZLUS90WnVZeXQ1cUZtRi9vPw=="
 	}
 }

@@ -1,271 +1,322 @@
 import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { RentlyConfig, getRentlyConfig } from "./config";
-import {
-    getAuthTokenTool,
-    getPlacesTool,
-    getCategoriesTool,
-    getAvailabilityTool,
-    validateSearchDatesTool,
-    createBookingTool
-} from "./tools";
+import { z } from "zod";
+
+// Import the modular configuration system
+import { resolveConfig, getConfigSummary } from './config/index.js';
+import { registerTools, filterTools, productionTools, getPlacesTool, getAvailabilityTool } from './tools/index.js';
+import { createScopedLogger, ErrorHandler } from './utils/index.js';
+
+// Create scoped logger for this module
+const logger = createScopedLogger('MCP');
 
 /**
- * RentlyMCP Agent class
- * Handles MCP server initialization and tool registration
+ * Main MCP Agent class with flexible configuration support
+ * Handles tool registration and request processing with 3-level priority configuration
  */
-export class RentlyMCP extends McpAgent {
-    protected config!: RentlyConfig;
-    private initialized: boolean = false;
+export class MyMCP extends McpAgent {
+	server = new McpServer({
+		name: "Flexible MCP Starter",
+		version: "2.0.0",
+	});
 
-    server = new McpServer({
-        name: "Rently MCP Server",
-        version: "1.0.0",
-        description: "Rently Model Context Protocol Server"
-    });
+	async init() {
+		logger.info('Initializing MCP Agent...');
+		
+		try {
+			// Register production tools in the global registry at startup
+			registerTools(productionTools);
+			logger.info('Registered production tools', { 
+				tools: productionTools.map(t => t.name)
+			});
 
-    constructor(state: DurableObjectState, env: any) {
-        super(state, env);
-        console.log(`[RentlyMCP] Constructor called`);
-    }
+			// TODO: Register dynamic tools from the registry with the MCP server
+			// await this.setupDynamicTools();
 
-    // Method helper to get configuration from request headers
-    private getConfigFromRequest(request: Request): RentlyConfig {
-        const baseUrl = request.headers.get('X-Context-Base-Url') || 
-                       request.headers.get('X-Rently-Base-Url') || 
-                       getRentlyConfig().baseUrl;
-        
-        console.log('🔍 [RentlyMCP] Configuration from request:', { baseUrl });
+			// Setup backward compatibility tools (original implementation)
+			await this.setupBackwardCompatibilityTools();
+			
+			logger.info('MCP Agent initialization complete');
+		} catch (error) {
+			logger.error('Failed to initialize MCP Agent', error);
+			throw error;
+		}
+	}
 
-        return { baseUrl };
-    }
+	/**
+	 * Setup dynamic tools from the registry with the MCP server
+	 * This registers tools from the global registry with the MCP server
+	 * TODO: Fix type compatibility issues
+	 */
+	/* private async setupDynamicTools() {
+		logger.debug('Setting up dynamic tools from registry...');
 
-    /**
-     * Get the current configuration
-     */
-    public getConfig(): RentlyConfig {
-        return this.config;
-    }
+		try {
+			// Get a default configuration for tool filtering
+			const defaultConfig = resolveConfig(new Headers(), {});
+			const availableTools = filterTools(defaultConfig.resolved);
 
+			// Register each tool with the MCP server
+			for (const tool of availableTools.tools) {
+				logger.debug(`Registering tool: ${tool.name}`);
+				
+				this.server.tool(
+					tool.name,
+					tool.description,
+					tool.schema.shape,
+					async (input: any) => {
+						try {
+							// Resolve configuration for this specific request
+							// In a real request context, headers would be available
+							const requestConfig = resolveConfig(new Headers(), {});
+							return await tool.handler(input, requestConfig.resolved);
+						} catch (error) {
+							logger.error(`Error in tool ${tool.name}`, error);
+							return ErrorHandler.createToolErrorResponse(error, tool.name);
+						}
+					}
+				);
+			}
 
-    /**
-     * Initialize the MCP server and register all tools
-     */
-    async init() {
-        console.log('🔧 [RentlyMCP] init() called');
+			logger.info('Dynamic tools setup complete', {
+				registered: availableTools.tools.map(t => t.name)
+			});
+		} catch (error) {
+			logger.error('Failed to setup dynamic tools', error);
+			throw error;
+		}
+	} */
 
-        // Only initialize once per Durable Object instance
-        if (this.initialized) {
-            console.log('✅ [RentlyMCP] Already initialized, skipping tool registration');
-            return;
-        }
+	/**
+	 * Setup backward compatibility tools from original implementation
+	 * These maintain the exact same interface as the original index.ts
+	 */
+	private async setupBackwardCompatibilityTools() {
+		logger.debug('Setting up backward compatibility tools...');
 
-        // Configuration will be set when handling requests
-        console.log('✅ [RentlyMCP] Initializing for the first time');
+		// Example math tools removed - keeping only production tools
 
-        // Register all available tools (only once)
-        this.registerTool(
-            getAuthTokenTool.name,
-            getAuthTokenTool.description,
-            getAuthTokenTool.parameters,
-            getAuthTokenTool.handler
-        );
+		// Enhanced health check tool using the new flexible configuration system
+		this.server.tool(
+			"health_check",
+			{ 
+				includeConfig: z.boolean().optional().default(false),
+				testConnectivity: z.boolean().optional().default(false)
+			},
+			async ({ includeConfig = false, testConnectivity = false }) => {
+				try {
+					logger.debug('Health check requested', { includeConfig, testConnectivity });
+					
+					// Extract configuration using the flexible system
+					// Note: In tool context, we use default env since headers aren't directly accessible
+					const configContext = resolveConfig(new Headers(), {});
+					
+					const healthInfo: any = {
+						status: 'healthy',
+						timestamp: new Date().toISOString(),
+						system: {
+							platform: 'Cloudflare Workers',
+							runtime: 'V8',
+							version: '2.0.0',
+							agent: 'Flexible MCP Starter'
+						}
+					};
 
-        this.registerTool(
-            getPlacesTool.name,
-            getPlacesTool.description,
-            getPlacesTool.parameters,
-            getPlacesTool.handler
-        );
+					// Include configuration details if requested
+					if (includeConfig) {
+						healthInfo.configuration = {
+							...configContext.resolved,
+							availableToolsCount: configContext.resolved.availableTools.length,
+							configSources: configContext.sources,
+							// Redact sensitive information
+							...Object.fromEntries(
+								Object.entries(configContext.resolved).map(([key, value]) => [
+									key,
+									key.toLowerCase().includes('pass') || 
+									key.toLowerCase().includes('secret') || 
+									key.toLowerCase().includes('token') 
+										? '[REDACTED]' 
+										: value
+								])
+							)
+						};
+					}
 
-        this.registerTool(
-            getCategoriesTool.name,
-            getCategoriesTool.description,
-            getCategoriesTool.parameters,
-            getCategoriesTool.handler
-        );
+					// Test connectivity if requested
+					if (testConnectivity) {
+						healthInfo.connectivity = await this.testConnectivity(configContext.resolved);
+						if (healthInfo.connectivity.some?.((c: any) => c.error)) {
+							healthInfo.status = 'degraded';
+						}
+					}
 
-        this.registerTool(
-            getAvailabilityTool.name,
-            getAvailabilityTool.description,
-            getAvailabilityTool.parameters,
-            getAvailabilityTool.handler
-        );
+					// Get tool filtering information
+					const toolFilter = filterTools(configContext.resolved);
+					healthInfo.tools = {
+						total: toolFilter.summary.total,
+						available: toolFilter.summary.included,
+						excluded: toolFilter.summary.excluded,
+						filteredTools: toolFilter.tools.map(t => t.name),
+						excludedTools: toolFilter.excluded
+					};
 
-        this.registerTool(
-            validateSearchDatesTool.name,
-            validateSearchDatesTool.description,
-            validateSearchDatesTool.parameters,
-            validateSearchDatesTool.handler
-        );
+					logger.debug('Health check completed', { status: healthInfo.status });
 
-        this.registerTool(
-            createBookingTool.name,
-            createBookingTool.description,
-            createBookingTool.parameters,
-            createBookingTool.handler
-        );
+					return {
+						content: [{
+							type: "text",
+							text: JSON.stringify(healthInfo, null, 2)
+						}]
+					};
+				} catch (error) {
+					logger.error('Health check failed', error);
+					return ErrorHandler.createToolErrorResponse(error, 'health_check');
+				}
+			}
+		);
 
-        this.initialized = true;
-        console.log("🔧 [RentlyMCP] Tools registered successfully");
-    }
+		// Rently API tools (manually registered)
+		this.server.tool(
+			"rently_get_places",
+			{
+				category: z.enum(['Oficinas', 'Aeropuerto', 'Domicilios']).optional(),
+				city: z.string().optional(),
+				includeCoordinates: z.boolean().optional().default(false)
+			},
+			async ({ category, city, includeCoordinates = false }) => {
+				try {
+					// Resolve configuration for this specific request
+					const configContext = resolveConfig(new Headers(), {});
+					const result = await getPlacesTool.handler({ category, city, includeCoordinates }, configContext.resolved);
+					// Extract the text content and return it directly
+					const textContent = result.content.find(c => c.type === 'text');
+					return {
+						content: [{ type: "text", text: textContent?.type === 'text' ? textContent.text : '{}' }]
+					};
+				} catch (error) {
+					logger.error('Error in rently_get_places tool', error);
+					return {
+						content: [{
+							type: "text",
+							text: `Error in rently_get_places: ${ErrorHandler.extractMessage(error)}`
+						}]
+					};
+				}
+			}
+		);
 
-    /**
-     * Register a new tool with the server
-     */
-    public registerTool(
-        name: string,
-        description: string,
-        parameters: Record<string, any>,
-        handler: (params: any, extra: any) => Promise<any>
-    ) {
-        this.server.tool(name, description, parameters, handler);
-    }
+		// Rently Get Availability Tool
+		this.server.tool(
+			"rently_get_availability",
+			{
+				from: z.string().optional(),
+				to: z.string().optional(),
+				fromPlace: z.number().optional(),
+				idVehiculo: z.number().optional(),
+				selectedAdditionals: z.array(z.object({
+					id: z.number(),
+					quantity: z.number().default(1)
+				})).optional().default([])
+			},
+			async ({ from, to, fromPlace, idVehiculo, selectedAdditionals = [] }) => {
+				try {
+					// Resolve configuration for this specific request
+					const configContext = resolveConfig(new Headers(), {});
+					const result = await getAvailabilityTool.handler({ 
+						from, 
+						to, 
+						fromPlace, 
+						idVehiculo, 
+						selectedAdditionals 
+					}, configContext.resolved);
+					// Extract the text content and return it directly
+					const textContent = result.content.find(c => c.type === 'text');
+					return {
+						content: [{ type: "text", text: textContent?.type === 'text' ? textContent.text : '{}' }]
+					};
+				} catch (error) {
+					logger.error('Error in rently_get_availability tool', error);
+					return {
+						content: [{
+							type: "text",
+							text: `Error in rently_get_availability: ${ErrorHandler.extractMessage(error)}`
+						}]
+					};
+				}
+			}
+		);
 
-    /**
-     * Handle MCP JSON-RPC requests
-     */
-    async fetch(request: Request): Promise<Response> {
-        console.log(`🔄 [RentlyMCP] fetch() called: ${request.method} ${request.url}`);
-        
-        // Handle CORS preflight
-        if (request.method === "OPTIONS") {
-            return new Response(null, {
-                headers: {
-                    "Access-Control-Allow-Origin": "*",
-                    "Access-Control-Allow-Methods": "POST, OPTIONS",
-                    "Access-Control-Allow-Headers": "Content-Type",
-                    "Access-Control-Max-Age": "86400"
-                }
-            });
-        }
+		logger.debug('Backward compatibility tools setup complete');
+	}
 
-        if (request.method !== "POST") {
-            return new Response("Method not allowed", { status: 405 });
-        }
+	/**
+	 * Test connectivity to configured URLs
+	 */
+	private async testConnectivity(config: any): Promise<any> {
+		// Find URL fields in configuration (flexible approach)
+		const urlFields = Object.entries(config)
+			.filter(([key, value]) => 
+				typeof value === 'string' && 
+				key.toLowerCase().includes('url') &&
+				(value.startsWith('http://') || value.startsWith('https://'))
+			);
+		
+		if (urlFields.length === 0) {
+			return {
+				status: 'no_urls_found',
+				message: 'No URL fields found in configuration for connectivity testing'
+			};
+		}
 
-        try {
-            // Parse JSON-RPC request
-            const body = await request.text();
-            console.log(`📝 [RentlyMCP] Request body: ${body}`);
-            
-            const jsonRpcRequest = JSON.parse(body);
-            console.log(`📋 [RentlyMCP] Parsed JSON-RPC:`, jsonRpcRequest);
+		const results = [];
+		for (const [key, url] of urlFields) {
+			try {
+				// Basic URL validation
+				new URL(url as string);
+				results.push({
+					field: key,
+					url: url,
+					status: 'url_valid',
+					message: `${key} is properly formatted`
+				});
+			} catch (error) {
+				results.push({
+					field: key,
+					url: url,
+					status: 'url_invalid',
+					message: `Invalid ${key}: ${ErrorHandler.extractMessage(error)}`,
+					error: true
+				});
+			}
+		}
 
-            let result;
+		return results;
+	}
+}
 
-            // Get configuration from request for this session
-            this.config = this.getConfigFromRequest(request);
-
-            // Handle MCP protocol methods
-            if (jsonRpcRequest.method === "initialize") {
-                // Initialize the server first
-                await this.init();
-                
-                result = {
-                    protocolVersion: "2024-11-05",
-                    capabilities: { tools: {} },
-                    serverInfo: {
-                        name: "Rently MCP Server",
-                        version: "1.0.0"
-                    }
-                };
-            } else if (jsonRpcRequest.method === "tools/list") {
-                result = {
-                    tools: [
-                        { name: "get_auth_token", description: "Get OAuth2 authentication token", inputSchema: getAuthTokenTool.parameters },
-                        { name: "get_places", description: "Get available pickup/return places", inputSchema: getPlacesTool.parameters },
-                        { name: "get_categories", description: "Get vehicle categories", inputSchema: getCategoriesTool.parameters },
-                        { name: "get_availability", description: "Check vehicle availability", inputSchema: getAvailabilityTool.parameters },
-                        { name: "validate_search_dates", description: "Validate search dates", inputSchema: validateSearchDatesTool.parameters },
-                        { name: "create_booking", description: "Create a new booking", inputSchema: createBookingTool.parameters }
-                    ]
-                };
-            } else if (jsonRpcRequest.method === "tools/call") {
-                // Execute the requested tool
-                const toolName = jsonRpcRequest.params.name;
-                const toolArgs = jsonRpcRequest.params.arguments || {};
-                
-                console.log(`🔧 [RentlyMCP] Calling tool: ${toolName} with args:`, toolArgs);
-                
-                // Call the appropriate tool handler
-                let toolResult;
-                switch (toolName) {
-                    case "get_auth_token":
-                        toolResult = await getAuthTokenTool.handler();
-                        break;
-                    case "get_places":
-                        toolResult = await getPlacesTool.handler(toolArgs);
-                        break;
-                    case "get_categories":
-                        toolResult = await getCategoriesTool.handler(toolArgs);
-                        break;
-                    case "get_availability":
-                        toolResult = await getAvailabilityTool.handler(toolArgs);
-                        break;
-                    case "validate_search_dates":
-                        toolResult = await validateSearchDatesTool.handler(toolArgs);
-                        break;
-                    case "create_booking":
-                        toolResult = await createBookingTool.handler(toolArgs);
-                        break;
-                    default:
-                        throw new Error(`Unknown tool: ${toolName}`);
-                }
-                
-                result = toolResult;
-            } else {
-                throw new Error(`Unknown method: ${jsonRpcRequest.method}`);
-            }
-
-            const response = {
-                jsonrpc: "2.0",
-                id: jsonRpcRequest.id,
-                result: result
-            };
-
-            console.log(`✅ [RentlyMCP] Response:`, response);
-
-            return new Response(JSON.stringify(response), {
-                headers: {
-                    "Content-Type": "application/json",
-                    "Access-Control-Allow-Origin": "*"
-                }
-            });
-
-        } catch (error) {
-            console.error(`❌ [RentlyMCP] Error processing request:`, error);
-            
-            const errorResponse = {
-                jsonrpc: "2.0",
-                error: {
-                    code: -32603,
-                    message: error instanceof Error ? error.message : "Internal error"
-                },
-                id: null
-            };
-
-            return new Response(JSON.stringify(errorResponse), {
-                status: 500,
-                headers: {
-                    "Content-Type": "application/json",
-                    "Access-Control-Allow-Origin": "*"
-                }
-            });
-        }
-    }
-
-    /**
-     * Static method to serve SSE endpoints
-     */
-    static serveSSE(path: string, options?: { binding?: string; corsOptions?: any }) {
-        return McpAgent.serveSSE(path, { binding: "MCP_OBJECT", ...options });
-    }
-
-    /**
-     * Static method to serve MCP endpoints
-     */
-    static serve(path: string, options?: { binding?: string; corsOptions?: any }) {
-        return McpAgent.serve(path, { binding: "MCP_OBJECT", ...options });
-    }
+/**
+ * Helper function to log configuration for a request
+ * Demonstrates the 3-level priority configuration system in action
+ */
+export function logRequestConfiguration(headers: Headers, env: any) {
+	const logger = createScopedLogger('Config');
+	
+	try {
+		const configContext = resolveConfig(headers, env);
+		
+		logger.info('=== Request Configuration ===');
+		logger.info('Configuration summary', getConfigSummary(configContext));
+		
+		// Log tool filtering
+		const toolFilter = filterTools(configContext.resolved);
+		logger.info('Tool filtering', {
+			available: `${toolFilter.summary.included}/${toolFilter.summary.total}`,
+			tools: toolFilter.tools.map(t => t.name),
+			excluded: toolFilter.excluded
+		});
+		
+		logger.info('=== End Configuration ===');
+	} catch (error) {
+		logger.error('Error logging configuration', error);
+	}
 }

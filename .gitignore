@@ -170,8 +170,6 @@ dist
 
 .dev.vars
 .wrangler/
-wrangler.local.jsonc
 
-
-# claude agents
-.claude
+# claude sub-agents
+.claude/
